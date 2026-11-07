@@ -1,0 +1,473 @@
+name: Sync Upstream and Rebuild
+
+# This workflow automatically fetches upstream changes, reapplies our customizations,
+# builds the app, and creates a PR for review. It does NOT auto-merge untested code.
+# Scheduled to run daily at 02:00 UTC (low traffic time).
+
+on:
+  schedule:
+    # Daily at 02:00 UTC (adjust as needed)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force_pr:
+        description: 'Create PR even if no upstream changes'
+        required: false
+        default: 'false'
+        type: boolean
+
+# Minimal permissions for security
+permissions:
+  contents: read
+
+jobs:
+  check-upstream:
+    name: Check for upstream changes
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+      upstream_short_sha: ${{ steps.check.outputs.upstream_short_sha }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/nekohasekai/open-screen-sharing.git || true
+          git fetch upstream main
+          
+      - name: Check for new commits
+        id: check
+        run: |
+          # Get the upstream SHA we're currently based on
+          # This assumes we tag or track the last sync point
+          # For initial run, compare against our main branch base
+          CURRENT_BASE=$(git merge-base HEAD upstream/main)
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          UPSTREAM_SHORT=$(git rev-parse --short upstream/main)
+          
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+          echo "upstream_short_sha=$UPSTREAM_SHORT" >> $GITHUB_OUTPUT
+          
+          if [ "$CURRENT_BASE" != "$UPSTREAM_SHA" ] || [ "${{ inputs.force_pr }}" = "true" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "✓ Upstream has new changes (or force_pr=true)"
+            git log --oneline $CURRENT_BASE..$UPSTREAM_SHA | head -10
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "✓ No new upstream changes"
+          fi
+
+  sync-and-build:
+    name: Sync, patch, and build
+    needs: check-upstream
+    if: needs.check-upstream.outputs.has_changes == 'true'
+    runs-on: macos-14  # macOS runner for Xcode build
+    permissions:
+      contents: write  # Needed to push branch
+      pull-requests: write  # Needed to create PR
+    outputs:
+      build_success: ${{ steps.build.outputs.success }}
+      patch_conflicts: ${{ steps.patch.outputs.conflicts }}
+      pr_number: ${{ steps.create_pr.outputs.pr_number }}
+    
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream https://github.com/nekohasekai/open-screen-sharing.git || true
+          git fetch upstream main
+          
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+          
+      - name: Select Xcode version
+        run: |
+          # Use Xcode 16 or latest available
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || \
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          
+      - name: Create sync branch
+        id: branch
+        run: |
+          BRANCH_NAME="upstream-sync-$(date +%Y%m%d)-${{ needs.check-upstream.outputs.upstream_short_sha }}"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          
+          # Check if branch already exists
+          if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
+            echo "Branch $BRANCH_NAME already exists, using it"
+            git fetch origin "$BRANCH_NAME"
+            git checkout "$BRANCH_NAME"
+          else
+            echo "Creating new branch $BRANCH_NAME from upstream/main"
+            git checkout -b "$BRANCH_NAME" upstream/main
+          fi
+          
+      - name: Apply custom patches
+        id: patch
+        continue-on-error: true
+        run: |
+          set +e  # Don't exit on error, we want to capture conflicts
+          
+          echo "=== Applying Hardware Display restoration patch ==="
+          
+          # Cherry-pick our customization commit
+          # This is the commit from cursor/restore-hardware-display-mode-f8de
+          CUSTOM_BRANCH="cursor/restore-hardware-display-mode-f8de"
+          
+          # Fetch our custom branch
+          git fetch origin "$CUSTOM_BRANCH"
+          
+          # Get the patch commit (last commit on custom branch not in upstream)
+          PATCH_COMMIT=$(git log --oneline origin/$CUSTOM_BRANCH ^upstream/main --no-merges | head -1 | cut -d' ' -f1)
+          
+          if [ -z "$PATCH_COMMIT" ]; then
+            echo "ERROR: Could not find customization commit"
+            echo "conflicts=unknown" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Patch commit: $PATCH_COMMIT"
+          
+          # Try to cherry-pick
+          git cherry-pick "$PATCH_COMMIT"
+          RESULT=$?
+          
+          if [ $RESULT -ne 0 ]; then
+            echo "conflicts=true" >> $GITHUB_OUTPUT
+            echo "::warning::Cherry-pick had conflicts - manual review needed"
+            
+            # Show conflicted files
+            echo "=== Conflicted files ==="
+            git status --short
+            
+            # Abort the cherry-pick
+            git cherry-pick --abort
+            
+            exit 1
+          else
+            echo "conflicts=false" >> $GITHUB_OUTPUT
+            echo "✓ Patch applied cleanly"
+            exit 0
+          fi
+          
+      - name: Build libsharing
+        if: steps.patch.outcome == 'success'
+        run: |
+          go run ./cmd/internal/build_libsharing
+          
+      - name: Build macOS app
+        id: build
+        if: steps.patch.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          
+          # Build for macOS (Debug configuration for faster build)
+          # Note: This will be ad-hoc signed only (no developer certificate)
+          xcodebuild clean build \
+            -skipMacroValidation \
+            -scheme OpenScreenSharing \
+            -configuration Debug \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            | tee build.log \
+            | grep -E "Build Succeeded|BUILD FAILED|error:|warning:" \
+            || true
+          
+          # Check if build succeeded
+          if grep -q "BUILD FAILED" build.log; then
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::error::Build failed"
+            exit 1
+          elif grep -q "Build Succeeded" build.log || [ $? -eq 0 ]; then
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "✓ Build succeeded"
+          else
+            echo "success=unknown" >> $GITHUB_OUTPUT
+            echo "::warning::Build status unclear"
+            exit 1
+          fi
+          
+      - name: Archive build artifacts
+        if: steps.build.outputs.success == 'true'
+        run: |
+          # Find the built app
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "Screen Sharing.app" -type d -path "*/Build/Products/Debug/*" | head -1)
+          
+          if [ -n "$APP_PATH" ]; then
+            echo "Found app at: $APP_PATH"
+            
+            # Create artifacts directory
+            mkdir -p artifacts
+            
+            # Create a zip of the app
+            ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" artifacts/OpenScreenSharing-Debug.zip
+            
+            # Create a metadata file
+            cat > artifacts/build-info.txt << EOF
+          Build Date: $(date -u +%Y-%m-%d\ %H:%M:%S\ UTC)
+          Upstream SHA: ${{ needs.check-upstream.outputs.upstream_sha }}
+          Upstream Short: ${{ needs.check-upstream.outputs.upstream_short_sha }}
+          Patch Applied: cursor/restore-hardware-display-mode-f8de
+          Build Configuration: Debug
+          Code Signing: Ad-hoc (unsigned)
+          Platform: macOS
+          
+          NOTE: This is an ad-hoc signed build for testing only.
+          It is NOT notarized and may require security overrides to run.
+          For production use, build locally with proper signing.
+          
+          Installation:
+          1. Download and unzip OpenScreenSharing-Debug.zip
+          2. Move "Screen Sharing.app" to Applications
+          3. First run: Right-click → Open (to bypass Gatekeeper)
+          4. Grant required permissions when prompted
+          EOF
+            
+            ls -lh artifacts/
+          else
+            echo "::error::Could not find built app"
+            exit 1
+          fi
+          
+      - name: Upload build artifacts
+        if: steps.build.outputs.success == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-${{ needs.check-upstream.outputs.upstream_short_sha }}
+          path: artifacts/
+          retention-days: 30
+          
+      - name: Commit sync metadata
+        if: steps.build.outputs.success == 'true'
+        run: |
+          # Add a metadata file to track the sync
+          mkdir -p .github/upstream-sync
+          cat > .github/upstream-sync/last-sync.json << EOF
+          {
+            "sync_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "upstream_repo": "nekohasekai/open-screen-sharing",
+            "upstream_sha": "${{ needs.check-upstream.outputs.upstream_sha }}",
+            "upstream_short_sha": "${{ needs.check-upstream.outputs.upstream_short_sha }}",
+            "patch_branch": "cursor/restore-hardware-display-mode-f8de",
+            "patch_applied_cleanly": true,
+            "build_succeeded": true,
+            "workflow_run": "${{ github.run_id }}"
+          }
+          EOF
+          
+          git add .github/upstream-sync/last-sync.json
+          git commit -m "chore: sync metadata for upstream ${{ needs.check-upstream.outputs.upstream_short_sha }}" || true
+          
+      - name: Push sync branch
+        if: steps.build.outputs.success == 'true'
+        run: |
+          git push origin "${{ steps.branch.outputs.branch_name }}" --force-with-lease
+          
+      - name: Create Pull Request
+        id: create_pr
+        if: steps.build.outputs.success == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check if PR already exists
+          EXISTING_PR=$(gh pr list --head "${{ steps.branch.outputs.branch_name }}" --json number --jq '.[0].number' || echo "")
+          
+          if [ -n "$EXISTING_PR" ]; then
+            echo "pr_number=$EXISTING_PR" >> $GITHUB_OUTPUT
+            echo "✓ PR #$EXISTING_PR already exists, updating it"
+            
+            # Update PR description
+            gh pr edit "$EXISTING_PR" --body "$(cat <<'EOF'
+          ## Automated Upstream Sync
+          
+          This PR automatically syncs changes from upstream [`nekohasekai/open-screen-sharing`](https://github.com/nekohasekai/open-screen-sharing) and reapplies our Hardware Display customizations.
+          
+          ### Upstream Changes
+          - **Upstream SHA**: `${{ needs.check-upstream.outputs.upstream_sha }}`
+          - **Commits**: [View upstream changes](https://github.com/nekohasekai/open-screen-sharing/compare/$(git merge-base origin/main upstream/main)...${{ needs.check-upstream.outputs.upstream_sha }})
+          
+          ### Patch Status
+          ✅ Custom patch applied cleanly without conflicts
+          
+          ### Build Status
+          ✅ macOS build succeeded (ad-hoc signed, Debug configuration)
+          
+          ### Build Artifacts
+          Download the built app from the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) artifacts section.
+          
+          **⚠️ Important**: This build is ad-hoc signed only. To run:
+          1. Download and unzip the artifact
+          2. Right-click → Open to bypass Gatekeeper
+          3. For production use, build locally with proper code signing
+          
+          ### Review Checklist
+          - [ ] Review upstream changes for compatibility
+          - [ ] Test the built app on macOS
+          - [ ] Verify Hardware Display mode still works correctly
+          - [ ] Check for any new conflicts with our customizations
+          - [ ] Update documentation if needed
+          
+          ### Next Steps
+          If everything looks good:
+          1. Test the downloadable build artifact
+          2. Review the code changes in this PR
+          3. Merge this PR to incorporate upstream updates
+          
+          If there are issues:
+          1. Close this PR
+          2. Fix issues manually on `cursor/restore-hardware-display-mode-f8de`
+          3. Re-run the workflow
+          
+          ---
+          
+          <sub>🤖 This PR was automatically generated by the [Sync Upstream workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/sync-upstream.yml) on $(date -u +%Y-%m-%d)</sub>
+          EOF
+            )"
+          else
+            # Create new PR
+            PR_URL=$(gh pr create \
+              --title "chore: sync upstream ${{ needs.check-upstream.outputs.upstream_short_sha }}" \
+              --head "${{ steps.branch.outputs.branch_name }}" \
+              --base main \
+              --body "$(cat <<'EOF'
+          ## Automated Upstream Sync
+          
+          This PR automatically syncs changes from upstream [`nekohasekai/open-screen-sharing`](https://github.com/nekohasekai/open-screen-sharing) and reapplies our Hardware Display customizations.
+          
+          ### Upstream Changes
+          - **Upstream SHA**: `${{ needs.check-upstream.outputs.upstream_sha }}`
+          - **Commits**: [View upstream changes](https://github.com/nekohasekai/open-screen-sharing/compare/$(git merge-base origin/main upstream/main)...${{ needs.check-upstream.outputs.upstream_sha }})
+          
+          ### Patch Status
+          ✅ Custom patch applied cleanly without conflicts
+          
+          ### Build Status
+          ✅ macOS build succeeded (ad-hoc signed, Debug configuration)
+          
+          ### Build Artifacts
+          Download the built app from the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) artifacts section.
+          
+          **⚠️ Important**: This build is ad-hoc signed only. To run:
+          1. Download and unzip the artifact
+          2. Right-click → Open to bypass Gatekeeper
+          3. For production use, build locally with proper code signing
+          
+          ### Review Checklist
+          - [ ] Review upstream changes for compatibility
+          - [ ] Test the built app on macOS
+          - [ ] Verify Hardware Display mode still works correctly
+          - [ ] Check for any new conflicts with our customizations
+          - [ ] Update documentation if needed
+          
+          ### Next Steps
+          If everything looks good:
+          1. Test the downloadable build artifact
+          2. Review the code changes in this PR
+          3. Merge this PR to incorporate upstream updates
+          
+          If there are issues:
+          1. Close this PR
+          2. Fix issues manually on cursor/restore-hardware-display-mode-f8de
+          3. Re-run the workflow
+          
+          ---
+          
+          <sub>🤖 This PR was automatically generated by the [Sync Upstream workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/sync-upstream.yml) on $(date -u +%Y-%m-%d)</sub>
+          EOF
+            )")
+            
+            PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "✓ Created PR #$PR_NUMBER: $PR_URL"
+          fi
+          
+      - name: Report patch conflicts
+        if: steps.patch.outputs.conflicts == 'true'
+        run: |
+          echo "::error::Patch application failed - conflicts detected"
+          echo "Manual intervention required. See conflict-resolution guide in HARDWARE_DISPLAY_RESTORATION.md"
+          exit 1
+          
+      - name: Report build failure
+        if: steps.patch.outcome == 'success' && steps.build.outputs.success != 'true'
+        run: |
+          echo "::error::Build failed after applying patch"
+          echo "Manual review of build errors required"
+          exit 1
+
+  notify-failure:
+    name: Create issue on failure
+    needs: [check-upstream, sync-and-build]
+    if: failure() && needs.check-upstream.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create or update issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check for existing open issue
+          EXISTING_ISSUE=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --label "upstream-sync" \
+            --state open \
+            --json number \
+            --jq '.[0].number' || echo "")
+          
+          ISSUE_BODY="## Upstream Sync Failed
+
+          The automated upstream sync workflow encountered an error.
+
+          - **Workflow Run**: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          - **Upstream SHA**: \`${{ needs.check-upstream.outputs.upstream_sha }}\`
+          - **Date**: $(date -u +%Y-%m-%d\ %H:%M:%S\ UTC)
+
+          ### Possible Issues
+          - Patch conflicts with upstream changes
+          - Build failures
+          - Missing dependencies
+
+          ### Next Steps
+          1. Review the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          2. Check for conflicts in modified files
+          3. Manually merge upstream and resolve conflicts
+          4. Update the \`cursor/restore-hardware-display-mode-f8de\` branch
+          5. Close this issue once resolved
+
+          See \`HARDWARE_DISPLAY_RESTORATION.md\` for detailed conflict resolution guidance."
+          
+          if [ -n "$EXISTING_ISSUE" ]; then
+            gh issue comment "$EXISTING_ISSUE" \
+              --repo "${{ github.repository }}" \
+              --body "$ISSUE_BODY"
+            echo "✓ Updated existing issue #$EXISTING_ISSUE"
+          else
+            gh issue create \
+              --repo "${{ github.repository }}" \
+              --title "Upstream sync failed ($(date +%Y-%m-%d))" \
+              --label "upstream-sync" \
+              --body "$ISSUE_BODY"
+            echo "✓ Created new issue"
+          fi
