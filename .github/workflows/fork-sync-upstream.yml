@@ -1,0 +1,130 @@
+name: Fork - Sync upstream
+
+# Merges nekohasekai/open-screen-sharing main into a new fork-sync/* branch,
+# builds it unsigned on macOS, and opens a PR against main for review.
+# main is never pushed to, and nothing is merged automatically.
+
+on:
+  schedule:
+    - cron: '17 19 * * *' # daily 19:17 UTC (03:17 UTC+8)
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fork-sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Merge upstream into candidate branch
+    if: github.repository != 'nekohasekai/open-screen-sharing'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      status: ${{ steps.sync.outputs.status }}
+      branch: ${{ steps.sync.outputs.branch }}
+      upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
+      fork_sha: ${{ steps.sync.outputs.fork_sha }}
+      merge_base: ${{ steps.sync.outputs.merge_base }}
+      conflicts: ${{ steps.sync.outputs.conflicts }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Merge upstream
+        id: sync
+        run: |-
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          PUSH=1 .github/fork/sync-upstream.sh
+
+  build:
+    name: Build candidate
+    needs: prepare
+    if: >-
+      needs.prepare.outputs.status == 'created' ||
+      (needs.prepare.outputs.status == 'exists' && github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fork-build-macos.yml
+    with:
+      ref: ${{ needs.prepare.outputs.branch }}
+
+  propose:
+    name: Open review PR
+    needs: [prepare, build]
+    if: >-
+      !cancelled() &&
+      (needs.prepare.outputs.status == 'created' || needs.prepare.outputs.status == 'exists')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Open or update PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+          FORK_SHA: ${{ needs.prepare.outputs.fork_sha }}
+          MERGE_BASE: ${{ needs.prepare.outputs.merge_base }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |-
+          if [ "$BUILD_RESULT" = success ]; then
+            STATUS="macOS unsigned build passed. Download the artifact from $RUN_URL"
+          else
+            STATUS="macOS build result: $BUILD_RESULT. See $RUN_URL"
+          fi
+          BODY="Upstream: https://github.com/nekohasekai/open-screen-sharing/commit/$UPSTREAM_SHA
+          Fork main at merge time: $FORK_SHA
+          Upstream changes: https://github.com/nekohasekai/open-screen-sharing/compare/$MERGE_BASE...$UPSTREAM_SHA
+
+          $STATUS
+
+          Created by the Fork - Sync upstream workflow. Review, test the artifact, then merge with a merge commit. See .github/fork/README.md."
+          PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$PR" ]; then
+            gh pr comment "$PR" --body "$STATUS"
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "Sync upstream ${UPSTREAM_SHA:0:12}" --body "$BODY"
+          fi
+
+  report:
+    name: Report
+    needs: [prepare, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Summary
+        env:
+          STATUS: ${{ needs.prepare.outputs.status }}
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+          FORK_SHA: ${{ needs.prepare.outputs.fork_sha }}
+          CONFLICTS: ${{ needs.prepare.outputs.conflicts }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |-
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| status | $STATUS |"
+            echo "| upstream | $UPSTREAM_SHA |"
+            echo "| fork main | $FORK_SHA |"
+            echo "| candidate branch | $BRANCH |"
+            echo "| build | ${BUILD_RESULT:-not run} |"
+            echo "| conflicts | ${CONFLICTS:-none} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$STATUS" = conflict ]; then
+            echo "::error::Upstream merge conflicts in: $CONFLICTS. main is unchanged; resolve manually per .github/fork/README.md"
+            exit 1
+          fi
+          if [ -z "$STATUS" ] || [ "$BUILD_RESULT" = failure ]; then
+            exit 1
+          fi
