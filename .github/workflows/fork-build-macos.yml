@@ -1,0 +1,83 @@
+name: Fork - Build macOS (unsigned)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build
+        type: string
+        required: true
+  workflow_dispatch:
+  push:
+    branches:
+      - 'cursor/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build macOS app (unsigned)
+    runs-on: xcode-27
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Select Xcode
+        run: .github/select_xcode.sh
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build library
+        run: go run ./cmd/internal/build_libsharing -target macos
+      - name: Build app
+        run: |-
+          mkdir -p build
+          xcodebuild build -skipMacroValidation \
+            -scheme OpenScreenSharing \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM= \
+            'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) UNSIGNED_BUILD' \
+            | tee build/xcodebuild.log | grep -E -e '(error|warning): ' -e '\*\* BUILD' || true
+          grep -q '\*\* BUILD SUCCEEDED \*\*' build/xcodebuild.log
+      - name: Package
+        run: |-
+          APP=$(find build/DerivedData/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
+          test -n "$APP"
+          # Only the app group code path references this key; it must be compiled out.
+          ! grep -q AppGroupIdentifier "$APP/Contents/MacOS/"*
+          codesign --force --deep --sign - "$APP"
+          SHA=$(git rev-parse HEAD)
+          mkdir -p dist
+          ditto -c -k --keepParent "$APP" "dist/OpenScreenSharing-macOS-unsigned.zip"
+          {
+            echo "commit: $SHA"
+            echo "commit subject: $(git log -1 --format=%s)"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
+            echo "signing: ad-hoc (not Developer ID signed, not notarized)"
+          } > dist/build-info.txt
+          cp build/xcodebuild.log dist/
+          echo "SHORT_SHA=${SHA:0:12}" >> "$GITHUB_ENV"
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OpenScreenSharing-macOS-unsigned-${{ env.SHORT_SHA }}
+          path: dist/
+          retention-days: 14
+          if-no-files-found: error

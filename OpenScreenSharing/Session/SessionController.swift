@@ -781,6 +781,10 @@ final class SessionController: Identifiable {
 
     private func restartHighPerformance() {
         guard usesHighPerformance, phase == .connected, !isVideo else { return }
+        if !usesDynamicResolution {
+            reconnectNow()
+            return
+        }
         highPerformanceStartPending = true
         startHighPerformanceIfDisplayReady()
     }
@@ -1597,7 +1601,11 @@ final class SessionController: Identifiable {
         guard uses != usesDynamicResolution else { return }
         usesDynamicResolution = uses
         rememberState()
-        requestVirtualDisplay(holdingPicture: true)
+        if !uses, phase == .connected {
+            reconnectNow()
+        } else {
+            requestVirtualDisplay(holdingPicture: true)
+        }
     }
 
     func setResolutionScale(_ scale: Double) {
