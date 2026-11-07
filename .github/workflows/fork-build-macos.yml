@@ -55,11 +55,12 @@ jobs:
             'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) UNSIGNED_BUILD' \
             | tee build/xcodebuild.log | grep -E -e '(error|warning): ' -e '\*\* BUILD' || true
           grep -q '\*\* BUILD SUCCEEDED \*\*' build/xcodebuild.log
-          grep -q -e '-D UNSIGNED_BUILD' build/xcodebuild.log
       - name: Package
         run: |-
           APP=$(find build/DerivedData/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
           test -n "$APP"
+          # Only the app group code path references this key; it must be compiled out.
+          ! grep -q AppGroupIdentifier "$APP/Contents/MacOS/"*
           codesign --force --deep --sign - "$APP"
           SHA=$(git rev-parse HEAD)
           mkdir -p dist
