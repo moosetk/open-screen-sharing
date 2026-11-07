@@ -48,10 +48,14 @@ If a newer upstream commit arrives first, a new branch/PR is created; close the 
 
 ## Upstream's own workflows in this fork
 
-Upstream's `build.yml` also runs here on every push to `main`. Its signed macOS job is
-skipped (no Developer ID secrets), but its iOS IPA job and its **Publish nightly** job run
-and publish a "Nightly build" pre-release and move the `nightly` tag in this fork. If that
-is unwanted, disable the "Build" workflow from the Actions tab (no file change needed).
+This fork only needs macOS builds, which the `fork-*` workflows provide. Upstream's
+`build.yml` ("Build") would otherwise run on every push to `main`: its signed macOS job is
+skipped (no Developer ID secrets), while its iOS IPA job and **Publish nightly** job run
+and publish a "Nightly build" pre-release and move the `nightly` tag in this fork.
+
+Recommended setup: Actions › "Build" › ⋯ › **Disable workflow**. This is a repository
+setting, not a file change, so upstream merges stay conflict-free. `release.yml` only runs
+when started by hand and can be left alone (or disabled the same way).
 
 ## Using the unsigned macOS build
 
