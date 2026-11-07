@@ -103,6 +103,11 @@ enum AppDatabase {
                     arguments: [JSONSerialization.data(withJSONObject: mappings), name])
             }
         }
+        migrator.registerMigration("restore-hardware-display") { db in
+            try db.alter(table: "computers") { t in
+                t.add(column: "usesDynamicResolution", .boolean).notNull().defaults(to: true)
+            }
+        }
         return migrator
     }()
 
