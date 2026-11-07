@@ -70,11 +70,23 @@ struct ResolutionOptions: View {
     let controller: SessionController
 
     var body: some View {
-        ForEach(VirtualDisplayMode.resolutionScales, id: \.self) { scale in
-            WithPerceptionTracking {
+        WithPerceptionTracking {
+            Section("Display") {
                 Toggle(
-                    resolutionScaleTitle(scale),
-                    isOn: Binding(get: { controller.resolutionScale == scale }, set: { _ in controller.setResolutionScale(scale) }))
+                    controller.info.dialect == .apple ? "Hardware Display" : "Fixed Resolution",
+                    isOn: Binding(get: { !controller.usesDynamicResolution }, set: { _ in controller.setUsesDynamicResolution(false) }))
+                Toggle(
+                    "Dynamic Resolution",
+                    isOn: Binding(get: { controller.usesDynamicResolution }, set: { _ in controller.setUsesDynamicResolution(true) }))
+            }
+            if controller.usesDynamicResolution {
+                Section("Resolution") {
+                    ForEach(VirtualDisplayMode.resolutionScales, id: \.self) { scale in
+                        Toggle(
+                            resolutionScaleTitle(scale),
+                            isOn: Binding(get: { controller.resolutionScale == scale }, set: { _ in controller.setResolutionScale(scale) }))
+                    }
+                }
             }
         }
     }
@@ -93,40 +105,50 @@ struct ResolutionPanel: View {
 
     var body: some View {
         WithPerceptionTracking {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Resolution")
-                    Spacer()
-                    Text(resolutionScaleTitle(scale))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 16) {
+                Picker("Display", selection: Binding(get: { controller.usesDynamicResolution }, set: { controller.setUsesDynamicResolution($0) })) {
+                    Text(controller.info.dialect == .apple ? "Hardware Display" : "Fixed Resolution").tag(false)
+                    Text("Dynamic Resolution").tag(true)
                 }
-                Slider(
-                    value: Binding(
-                        get: { scale },
-                        set: { value in
-                            if draggedScale != nil {
-                                draggedScale = value
-                            } else {
-                                controller.setResolutionScale(value)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                if controller.usesDynamicResolution {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Resolution")
+                            Spacer()
+                            Text(resolutionScaleTitle(scale))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { scale },
+                                set: { value in
+                                    if draggedScale != nil {
+                                        draggedScale = value
+                                    } else {
+                                        controller.setResolutionScale(value)
+                                    }
+                                }),
+                            in: VirtualDisplayMode.resolutionScaleRange,
+                            step: VirtualDisplayMode.resolutionScaleStep
+                        ) {
+                            Text("Resolution")
+                        } onEditingChanged: { editing in
+                            if editing {
+                                draggedScale = controller.resolutionScale
+                            } else if let draggedScale {
+                                self.draggedScale = nil
+                                controller.setResolutionScale(draggedScale)
                             }
-                        }),
-                    in: VirtualDisplayMode.resolutionScaleRange,
-                    step: VirtualDisplayMode.resolutionScaleStep
-                ) {
-                    Text("Resolution")
-                } onEditingChanged: { editing in
-                    if editing {
-                        draggedScale = controller.resolutionScale
-                    } else if let draggedScale {
-                        self.draggedScale = nil
-                        controller.setResolutionScale(draggedScale)
+                        }
+                        Text("Raising the resolution by scaling reduces sharpness and increases bandwidth use and picture latency.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Text("Raising the resolution by scaling reduces sharpness and increases bandwidth use and picture latency.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .font(.body)
             .padding()

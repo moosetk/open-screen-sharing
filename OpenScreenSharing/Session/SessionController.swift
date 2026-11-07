@@ -94,6 +94,7 @@ nonisolated struct SessionMemory: Equatable, Sendable {
     var quality = SessionQuality.adaptive
     var observes = false
     var sharesClipboard = true
+    var usesDynamicResolution = true
     var resolutionScale = VirtualDisplayMode.defaultResolutionScale
     var display: DisplaySelection?
     var usesHDR = false
@@ -146,6 +147,7 @@ final class SessionController: Identifiable {
     private(set) var imageSize: CGSize = .zero
     private(set) var picture = ScreenPicture.none
     private(set) var isVideo = false
+    private(set) var usesDynamicResolution = true
     private(set) var resolutionScale = VirtualDisplayMode.defaultResolutionScale
     private(set) var hdrEnabled = false
     var displaySupportsHDR = false
@@ -428,6 +430,7 @@ final class SessionController: Identifiable {
         quality = memory.quality
         mode = memory.observes ? .observe : .control
         clipboardSharing = memory.sharesClipboard
+        usesDynamicResolution = memory.usesDynamicResolution
         resolutionScale = memory.resolutionScale
         chosenDisplay = memory.display
         hdrEnabled = memory.usesHDR && DecoderCapabilities.current.supportsHDR
@@ -443,6 +446,7 @@ final class SessionController: Identifiable {
             quality: quality,
             observes: mode == .observe,
             sharesClipboard: clipboardSharing,
+            usesDynamicResolution: usesDynamicResolution,
             resolutionScale: resolutionScale,
             display: chosenDisplay,
             usesHDR: hdrEnabled,
@@ -1444,7 +1448,7 @@ final class SessionController: Identifiable {
     }
 
     var canUseHDR: Bool {
-        usesHighPerformance && capabilities.contains(.highPerformance) && displaySupportsHDR && networkSupportsHDR
+        usesHighPerformance && capabilities.contains(.highPerformance) && usesDynamicResolution && displaySupportsHDR && networkSupportsHDR
     }
 
     func setHDR(_ enabled: Bool) {
@@ -1589,6 +1593,13 @@ final class SessionController: Identifiable {
         }
     }
 
+    func setUsesDynamicResolution(_ uses: Bool) {
+        guard uses != usesDynamicResolution else { return }
+        usesDynamicResolution = uses
+        rememberState()
+        requestVirtualDisplay(holdingPicture: true)
+    }
+
     func setResolutionScale(_ scale: Double) {
         guard scale != resolutionScale else { return }
         resolutionScale = scale
@@ -1597,7 +1608,7 @@ final class SessionController: Identifiable {
     }
 
     var wantsVirtualDisplay: Bool {
-        !isIOS && (usesHighPerformance || route.remoteProtocol == .rdp)
+        !isIOS && usesDynamicResolution && (usesHighPerformance || route.remoteProtocol == .rdp)
     }
 
     var pictureMatchesWindow: Bool {
