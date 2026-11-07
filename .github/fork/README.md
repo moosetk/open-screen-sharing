@@ -53,7 +53,7 @@ This fork only needs macOS builds, which the `fork-*` workflows provide. Upstrea
 skipped (no Developer ID secrets), while its iOS IPA job and **Publish nightly** job run
 and publish a "Nightly build" pre-release and move the `nightly` tag in this fork.
 
-Recommended setup: Actions › "Build" › ⋯ › **Disable workflow**. This is a repository
+Recommended setup (already applied on 2026-11-08): Actions › "Build" › ⋯ › **Disable workflow**. This is a repository
 setting, not a file change, so upstream merges stay conflict-free. `release.yml` only runs
 when started by hand and can be left alone (or disabled the same way).
 
