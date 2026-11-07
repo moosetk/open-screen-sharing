@@ -65,7 +65,7 @@ jobs:
     name: Sync, patch, and build
     needs: check-upstream
     if: needs.check-upstream.outputs.has_changes == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-14  # macOS runner for Xcode build
+    runs-on: macos-latest  # macOS runner for Xcode build (currently macos-14)
     permissions:
       contents: write  # Needed to push branch
       pull-requests: write  # Needed to create PR
