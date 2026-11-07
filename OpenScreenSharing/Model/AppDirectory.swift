@@ -3,8 +3,14 @@ import os
 
 nonisolated enum AppDirectory {
     #if os(macOS)
+    #if UNSIGNED_BUILD
+    // Without a team-signed app group entitlement macOS denies access to the group container.
+    static let group = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent(Bundle.main.bundleIdentifier!, isDirectory: true)
+    #else
     static let group = FileManager.default.containerURL(
         forSecurityApplicationGroupIdentifier: Bundle.main.object(forInfoDictionaryKey: "AppGroupIdentifier") as! String)!
+    #endif
     static let caches: URL = {
         var caches = group.appendingPathComponent("Library/Caches", isDirectory: true)
         do {

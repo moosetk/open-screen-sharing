@@ -62,9 +62,14 @@ when started by hand and can be left alone (or disabled the same way).
 Download `OpenScreenSharing-macOS-unsigned-<sha>` from the run, unzip, move the app to
 /Applications. It is ad-hoc signed and not notarized, so macOS blocks the first launch:
 use System Settings › Privacy & Security › Open Anyway, or
-`xattr -dr com.apple.quarantine "/Applications/<app>.app"`. The build has no team ID, so
-its data container differs from the App Store/Developer ID app, and macOS may ask for
-permission to access app data.
+`xattr -dr com.apple.quarantine "/Applications/<app>.app"`.
+
+An ad-hoc signed app cannot use the app group container (macOS denies it, and the app
+would crash in `AppDatabase.open()` at launch). The workflow therefore compiles with
+`UNSIGNED_BUILD`, which makes `AppDirectory.group` use
+`~/Library/Application Support/io.nekohasekai.screensharing` instead. Connections saved by
+the official app are not visible to this build. This is the only fork change outside the
+Hardware Display patch, in `OpenScreenSharing/Model/AppDirectory.swift`.
 
 ## Resolving a conflict by hand
 
