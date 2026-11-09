@@ -7,6 +7,25 @@ on:
         description: Git ref to build
         type: string
         required: true
+    outputs:
+      marketing_version:
+        description: CFBundleShortVersionString of the integrated upstream release
+        value: ${{ jobs.version.outputs.marketing_version }}
+      build_number:
+        description: CFBundleVersion of the newest upstream build contained in the tree
+        value: ${{ jobs.version.outputs.build_number }}
+      upstream_sha:
+        description: Upstream commit integrated into the built tree
+        value: ${{ jobs.version.outputs.upstream_sha }}
+      marketing_version_source:
+        description: Where the marketing version came from
+        value: ${{ jobs.version.outputs.marketing_version_source }}
+      build_number_source:
+        description: Where the build number came from
+        value: ${{ jobs.version.outputs.build_number_source }}
+      ignored_nightly_marketing_version:
+        description: Nightly metadata version that is not a release and was not used
+        value: ${{ jobs.version.outputs.ignored_nightly_marketing_version }}
   workflow_dispatch:
   push:
     branches:
@@ -20,8 +39,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    name: Resolve upstream version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      marketing_version: ${{ steps.resolve.outputs.marketing_version }}
+      build_number: ${{ steps.resolve.outputs.build_number }}
+      upstream_sha: ${{ steps.resolve.outputs.upstream_sha }}
+      marketing_version_source: ${{ steps.resolve.outputs.marketing_version_source }}
+      build_number_source: ${{ steps.resolve.outputs.build_number_source }}
+      ignored_nightly_marketing_version: ${{ steps.resolve.outputs.ignored_nightly_marketing_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # Full history so the integrated upstream commit can be identified.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Version regression tests
+        run: .github/fork/resolve-version-test.sh
+      - name: Resolve version
+        id: resolve
+        run: .github/fork/resolve-version.sh
+
   build:
     name: Build macOS app (unsigned)
+    needs: version
     runs-on: xcode-27
     timeout-minutes: 90
     permissions:
@@ -31,8 +76,18 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           ref: ${{ inputs.ref || github.ref }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
+      - name: Resolve version
+        run: |-
+          mkdir -p build
+          VERSION_ENV=build/version.env VERSION_JSON=build/version.json .github/fork/resolve-version.sh
+          . build/version.env
+          test "$marketing_version" = "${{ needs.version.outputs.marketing_version }}"
+          test "$build_number" = "${{ needs.version.outputs.build_number }}"
+          test "$upstream_sha" = "${{ needs.version.outputs.upstream_sha }}"
+          test "$ignored_nightly_marketing_version" = "${{ needs.version.outputs.ignored_nightly_marketing_version }}"
+          echo "display=$marketing_version ($build_number)"
       - name: Select Xcode
         run: .github/select_xcode.sh
       - name: Setup Go
@@ -44,7 +99,11 @@ jobs:
         run: go run ./cmd/internal/build_libsharing -target macos
       - name: Build app
         run: |-
+          . build/version.env
           mkdir -p build
+          # MARKETING_VERSION / CURRENT_PROJECT_VERSION override the 1.0.1 / 1
+          # placeholders committed in the Xcode project. Upstream does the same
+          # in its signed build and does not store the real numbers in the project.
           xcodebuild build -skipMacroValidation \
             -scheme OpenScreenSharing \
             -configuration Release \
@@ -52,32 +111,60 @@ jobs:
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM= \
+            "MARKETING_VERSION=$marketing_version" \
+            "CURRENT_PROJECT_VERSION=$build_number" \
             'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) UNSIGNED_BUILD' \
             | tee build/xcodebuild.log | grep -E -e '(error|warning): ' -e '\*\* BUILD' || true
           grep -q '\*\* BUILD SUCCEEDED \*\*' build/xcodebuild.log
       - name: Package
         run: |-
+          . build/version.env
           APP=$(find build/DerivedData/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
           test -n "$APP"
+          INFO="$APP/Contents/Info.plist"
+          SHORT=$(plutil -extract CFBundleShortVersionString raw "$INFO")
+          BUNDLE=$(plutil -extract CFBundleVersion raw "$INFO")
+          test -n "$SHORT"
+          test -n "$BUNDLE"
+          test "$SHORT" = "$marketing_version"
+          test "$BUNDLE" = "$build_number"
           # Only the app group code path references this key; it must be compiled out.
           ! grep -q AppGroupIdentifier "$APP/Contents/MacOS/"*
           codesign --force --deep --sign - "$APP"
           SHA=$(git rev-parse HEAD)
           mkdir -p dist
           ditto -c -k --keepParent "$APP" "dist/OpenScreenSharing-macOS-unsigned.zip"
+          cp build/version.json dist/metadata.json
           {
             echo "commit: $SHA"
             echo "commit subject: $(git log -1 --format=%s)"
+            echo "display version: $SHORT ($BUNDLE)"
+            echo "marketing version: $SHORT"
+            echo "build number: $BUNDLE"
+            echo "upstream commit: $upstream_sha"
+            echo "marketing version source: $marketing_version_source"
+            echo "build number source: $build_number_source"
+            echo "ignored nightly marketing version: ${ignored_nightly_marketing_version:-none}"
             echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
             echo "signing: ad-hoc (not Developer ID signed, not notarized)"
           } > dist/build-info.txt
           cp build/xcodebuild.log dist/
+          {
+            echo "### Built bundle"
+            echo ""
+            echo "| Info.plist | value |"
+            echo "|---|---|"
+            echo "| CFBundleShortVersionString | $SHORT |"
+            echo "| CFBundleVersion | $BUNDLE |"
+            echo "| display | $SHORT ($BUNDLE) |"
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "SHORT_SHA=${SHA:0:12}" >> "$GITHUB_ENV"
+          echo "VERSION_LABEL=${SHORT}-${BUNDLE}" >> "$GITHUB_ENV"
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: OpenScreenSharing-macOS-unsigned-${{ env.SHORT_SHA }}
+          name: OpenScreenSharing-macOS-unsigned-${{ env.VERSION_LABEL }}-${{ env.SHORT_SHA }}
           path: dist/
           retention-days: 14
           if-no-files-found: error

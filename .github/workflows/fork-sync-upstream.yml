@@ -73,22 +73,40 @@ jobs:
           MERGE_BASE: ${{ needs.prepare.outputs.merge_base }}
           BUILD_RESULT: ${{ needs.build.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MARKETING_VERSION: ${{ needs.build.outputs.marketing_version }}
+          BUILD_NUMBER: ${{ needs.build.outputs.build_number }}
+          MARKETING_SOURCE: ${{ needs.build.outputs.marketing_version_source }}
+          BUILD_SOURCE: ${{ needs.build.outputs.build_number_source }}
+          IGNORED_NIGHTLY_VERSION: ${{ needs.build.outputs.ignored_nightly_marketing_version }}
         run: |-
           if [ "$BUILD_RESULT" = success ]; then
             STATUS="macOS unsigned build passed. Download the artifact from $RUN_URL"
           else
             STATUS="macOS build result: $BUILD_RESULT. See $RUN_URL"
           fi
+          VERSION_NOTE=""
+          if [ -n "$MARKETING_VERSION" ] && [ -n "$BUILD_NUMBER" ]; then
+            VERSION_NOTE="Resolved app version: ${MARKETING_VERSION} (${BUILD_NUMBER})
+          Marketing version source: $MARKETING_SOURCE
+          Build number source: $BUILD_SOURCE"
+            if [ -n "$IGNORED_NIGHTLY_VERSION" ]; then
+              VERSION_NOTE="$VERSION_NOTE
+          Ignored nightly marketing version: $IGNORED_NIGHTLY_VERSION (upstream nightly metadata; not a release tag, so it is not the app version)"
+            fi
+            VERSION_NOTE="$VERSION_NOTE
+
+          "
+          fi
           BODY="Upstream: https://github.com/nekohasekai/open-screen-sharing/commit/$UPSTREAM_SHA
           Fork main at merge time: $FORK_SHA
           Upstream changes: https://github.com/nekohasekai/open-screen-sharing/compare/$MERGE_BASE...$UPSTREAM_SHA
 
-          $STATUS
+          ${VERSION_NOTE}${STATUS}
 
           Created by the Fork - Sync upstream workflow. Review, test the artifact, then merge with a merge commit. See .github/fork/README.md."
           PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
           if [ -n "$PR" ]; then
-            gh pr comment "$PR" --body "$STATUS"
+            gh pr comment "$PR" --body "${VERSION_NOTE}${STATUS}"
           else
             gh pr create --base main --head "$BRANCH" \
               --title "Sync upstream ${UPSTREAM_SHA:0:12}" --body "$BODY"
@@ -109,6 +127,9 @@ jobs:
           FORK_SHA: ${{ needs.prepare.outputs.fork_sha }}
           CONFLICTS: ${{ needs.prepare.outputs.conflicts }}
           BUILD_RESULT: ${{ needs.build.result }}
+          MARKETING_VERSION: ${{ needs.build.outputs.marketing_version }}
+          BUILD_NUMBER: ${{ needs.build.outputs.build_number }}
+          IGNORED_NIGHTLY_VERSION: ${{ needs.build.outputs.ignored_nightly_marketing_version }}
         run: |-
           {
             echo "| | |"
@@ -119,6 +140,12 @@ jobs:
             echo "| candidate branch | $BRANCH |"
             echo "| build | ${BUILD_RESULT:-not run} |"
             echo "| conflicts | ${CONFLICTS:-none} |"
+            if [ -n "$MARKETING_VERSION" ] && [ -n "$BUILD_NUMBER" ]; then
+              echo "| display version | $MARKETING_VERSION ($BUILD_NUMBER) |"
+            fi
+            if [ -n "$IGNORED_NIGHTLY_VERSION" ]; then
+              echo "| ignored nightly marketing version | $IGNORED_NIGHTLY_VERSION |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$STATUS" = conflict ]; then
             echo "::error::Upstream merge conflicts in: $CONFLICTS. main is unchanged; resolve manually per .github/fork/README.md"
