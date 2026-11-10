@@ -847,7 +847,7 @@ final class RemoteScreenNSView: NSView, RemoteScreen {
         default:
             scrollUsesPhases = false
             scrollPansView = false
-            sendScroll(delta, precise: true)
+            sendScroll(delta)
         }
     }
 

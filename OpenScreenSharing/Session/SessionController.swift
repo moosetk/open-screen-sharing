@@ -2002,8 +2002,10 @@ final class SessionController: Identifiable {
     func scroll(byPixels delta: CGPoint, precise: Bool = false) {
         guard isControlling else { return }
         var delta = delta
-        // RDP negates vertical wheel units (b73c815). Discrete mouse deltas need that negation.
-        // Precise trackpad deltas already have the opposite sign, so undo it before the shared send.
+        // Fork-only. Upstream b73c815 negates every RDP vertical scroll, which matches a
+        // discrete mouse wheel. Trackpad deltas already have the opposite sign, so undo that
+        // negation for precise trackpad input only. Delete this block, and the precise: true
+        // call sites, when upstream fixes trackpad scrolling over RDP.
         if precise, route.remoteProtocol == .rdp {
             delta.y = -delta.y
         }
