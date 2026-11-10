@@ -816,7 +816,7 @@ final class RemoteScreenNSView: NSView, RemoteScreen {
         let delta = CGPoint(x: event.scrollingDeltaX, y: event.scrollingDeltaY)
         if !event.momentumPhase.isEmpty {
             if !scrollUsesPhases, !scrollPansView {
-                sendScroll(delta)
+                sendScroll(delta, precise: true)
             }
             return
         }
@@ -847,7 +847,7 @@ final class RemoteScreenNSView: NSView, RemoteScreen {
         default:
             scrollUsesPhases = false
             scrollPansView = false
-            sendScroll(delta)
+            sendScroll(delta, precise: true)
         }
     }
 
@@ -861,7 +861,7 @@ final class RemoteScreenNSView: NSView, RemoteScreen {
             controller.scroll(byPixels: CGPoint(x: delta.x / scale, y: delta.y / scale), phase: scrollStarted ? .changed : .began)
             scrollStarted = true
         } else {
-            sendScroll(delta)
+            sendScroll(delta, precise: true)
         }
     }
 
@@ -876,7 +876,7 @@ final class RemoteScreenNSView: NSView, RemoteScreen {
         }
     }
 
-    private func sendScroll(_ delta: CGPoint) {
+    private func sendScroll(_ delta: CGPoint, precise: Bool = false) {
         scrollRemainder.x += delta.x
         scrollRemainder.y += delta.y
         let sendX = scrollRemainder.x.rounded(.towardZero)
@@ -885,7 +885,7 @@ final class RemoteScreenNSView: NSView, RemoteScreen {
         scrollRemainder.x -= sendX
         scrollRemainder.y -= sendY
         let scale = displayScale
-        controller.scroll(byPixels: CGPoint(x: sendX / scale, y: sendY / scale))
+        controller.scroll(byPixels: CGPoint(x: sendX / scale, y: sendY / scale), precise: precise)
     }
 
     override func magnify(with event: NSEvent) {

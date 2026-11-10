@@ -541,7 +541,7 @@ final class ScreenInput: NSObject, UIGestureRecognizerDelegate, UIPointerInterac
         var remainder = CGPoint.zero
     }
 
-    private func scroll(_ stream: inout ScrollStream, by delta: CGPoint) {
+    private func scroll(_ stream: inout ScrollStream, by delta: CGPoint, precise: Bool = false) {
         let scale = view.displayScale
         if stream.usesPhases {
             controller.scroll(byPixels: CGPoint(x: delta.x / scale, y: delta.y / scale), phase: stream.started ? .changed : .began)
@@ -555,7 +555,7 @@ final class ScreenInput: NSObject, UIGestureRecognizerDelegate, UIPointerInterac
         guard sendX != 0 || sendY != 0 else { return }
         stream.remainder.x -= sendX
         stream.remainder.y -= sendY
-        controller.scroll(byPixels: CGPoint(x: sendX / scale, y: sendY / scale))
+        controller.scroll(byPixels: CGPoint(x: sendX / scale, y: sendY / scale), precise: precise)
     }
 
     private func endScroll(_ stream: inout ScrollStream, velocity: CGPoint, cancelled: Bool) {
@@ -687,7 +687,7 @@ final class ScreenInput: NSObject, UIGestureRecognizerDelegate, UIPointerInterac
             if hardwareScrollPansView {
                 view.panViewport(by: delta)
             } else {
-                scroll(&hardwareScroll, by: delta)
+                scroll(&hardwareScroll, by: delta, precise: true)
             }
         case .ended:
             endScroll(&hardwareScroll, velocity: gesture.velocity(in: view), cancelled: false)

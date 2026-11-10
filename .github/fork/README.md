@@ -12,6 +12,10 @@ Fork-only files (keep them out of upstream merges' way):
 Everything else is upstream code; `build.yml`, `release.yml` and `select_xcode.sh` are
 upstream's and are left untouched so merges stay clean.
 
+One behavioral change sits in upstream files: precise trackpad scrolling over RDP keeps
+the opposite vertical sign from a discrete mouse wheel. See `SessionController.scroll(byPixels:precise:)`.
+Mouse-wheel RDP behavior is unchanged. Apple VNC is unchanged.
+
 ## How updates flow
 
 `main` is the fork's known-good branch and carries the patch as normal commits on top of

@@ -1999,11 +1999,17 @@ final class SessionController: Identifiable {
         }
     }
 
-    func scroll(byPixels delta: CGPoint) {
+    func scroll(byPixels delta: CGPoint, precise: Bool = false) {
         guard isControlling else { return }
+        var delta = delta
+        // RDP negates vertical wheel units (b73c815). Discrete mouse deltas need that negation.
+        // Precise trackpad deltas already have the opposite sign, so undo it before the shared send.
+        if precise, route.remoteProtocol == .rdp {
+            delta.y = -delta.y
+        }
         let point = serverPoint(pointerPosition)
-        let delta = pictureTurns.pictureVector(delta)
-        session?.sendScroll(x: Int(point.x), y: Int(point.y), deltaX: Double(delta.x), deltaY: Double(delta.y))
+        let turned = pictureTurns.pictureVector(delta)
+        session?.sendScroll(x: Int(point.x), y: Int(point.y), deltaX: Double(turned.x), deltaY: Double(turned.y))
     }
 
     private func clampToImage(_ point: CGPoint) -> CGPoint {
