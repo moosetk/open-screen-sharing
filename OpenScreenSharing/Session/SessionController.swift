@@ -1999,19 +1999,11 @@ final class SessionController: Identifiable {
         }
     }
 
-    func scroll(byPixels delta: CGPoint, precise: Bool = false) {
+    func scroll(byPixels delta: CGPoint) {
         guard isControlling else { return }
-        var delta = delta
-        // Fork-only. Upstream b73c815 negates every RDP vertical scroll, which matches a
-        // discrete mouse wheel. Trackpad deltas already have the opposite sign, so undo that
-        // negation for precise trackpad input only. Delete this block, and the precise: true
-        // call sites, when upstream fixes trackpad scrolling over RDP.
-        if precise, route.remoteProtocol == .rdp {
-            delta.y = -delta.y
-        }
         let point = serverPoint(pointerPosition)
-        let turned = pictureTurns.pictureVector(delta)
-        session?.sendScroll(x: Int(point.x), y: Int(point.y), deltaX: Double(turned.x), deltaY: Double(turned.y))
+        let delta = pictureTurns.pictureVector(delta)
+        session?.sendScroll(x: Int(point.x), y: Int(point.y), deltaX: Double(delta.x), deltaY: Double(delta.y))
     }
 
     private func clampToImage(_ point: CGPoint) -> CGPoint {

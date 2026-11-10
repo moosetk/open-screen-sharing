@@ -12,10 +12,10 @@ Fork-only files (keep them out of upstream merges' way):
 Everything else is upstream code; `build.yml`, `release.yml` and `select_xcode.sh` are
 upstream's and are left untouched so merges stay clean.
 
-One temporary behavioral change sits in upstream files. Precise trackpad scrolling over RDP
-undoes the vertical negation from upstream `b73c815`; a discrete mouse wheel does not.
-Delete the `precise` block in `SessionController.scroll(byPixels:precise:)` and every
-`precise: true` call site when upstream fixes trackpad scrolling. Apple VNC is unchanged.
+One temporary behavioral change sits in upstream code. `internal/rdp/input.go` does not
+negate vertical scroll, undoing that part of upstream `b73c815`. With the negation, both
+the trackpad and the mouse wheel are reversed relative to Apple VNC. Remove this fork
+change when upstream fixes RDP scroll direction. Apple VNC is unchanged.
 
 ## How updates flow
 

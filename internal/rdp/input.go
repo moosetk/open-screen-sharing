@@ -493,7 +493,10 @@ func (c *Client) SendScroll(x, y int, deltaX, deltaY float64) error {
 	horizontal := c.session.inputFlags.Load()&inputFlagMouseHWheel != 0
 	c.input.access.Lock()
 	defer c.input.access.Unlock()
-	return c.input.scroll(wireX, wireY, deltaX*unitsPerPixel, -deltaY*unitsPerPixel, horizontal)
+	// Fork-only. Upstream b73c815 negates vertical units, which reverses both the
+	// trackpad and the mouse wheel relative to Apple VNC. Remove this fork change
+	// when upstream fixes RDP scroll direction.
+	return c.input.scroll(wireX, wireY, deltaX*unitsPerPixel, deltaY*unitsPerPixel, horizontal)
 }
 
 func (c *Client) SendText(text string) error {
