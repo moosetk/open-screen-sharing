@@ -2,7 +2,9 @@ name: Fork - Sync upstream
 
 # Merges nekohasekai/open-screen-sharing main into a new fork-sync/* branch,
 # builds it unsigned on macOS, and opens a PR against main for review.
-# main is never pushed to, and nothing is merged automatically.
+# prepare authenticates git with FORK_SYNC_TOKEN so the candidate branch can
+# include upstream edits under .github/workflows/. main is never pushed to,
+# and nothing is merged automatically.
 
 on:
   schedule:
@@ -30,10 +32,25 @@ jobs:
       merge_base: ${{ steps.sync.outputs.merge_base }}
       conflicts: ${{ steps.sync.outputs.conflicts }}
     steps:
+      - name: Require FORK_SYNC_TOKEN
+        env:
+          FORK_SYNC_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |-
+          if [ -z "${FORK_SYNC_TOKEN}" ]; then
+            echo "::error::Repository secret FORK_SYNC_TOKEN is missing or empty. Refusing to check out or push with GITHUB_TOKEN, which cannot update files under .github/workflows."
+            exit 1
+          fi
+      # Upstream merges can edit .github/workflows/. The default GITHUB_TOKEN is a
+      # GitHub App token and is rejected for those pushes. Persist this PAT so
+      # sync-upstream.sh's origin fetch and push use it. The token input is set
+      # explicitly: omitting it would fall back to github.token, and an empty
+      # value fails checkout instead of using that default.
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.FORK_SYNC_TOKEN }}
       - name: Merge upstream
         id: sync
         run: |-
