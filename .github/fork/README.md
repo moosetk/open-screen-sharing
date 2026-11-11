@@ -20,10 +20,14 @@ is rewritten and no force push is needed.
 
 `Fork - Sync upstream` (daily at 19:17 UTC / 03:17 UTC+8, or Run workflow):
 
-1. **prepare** (`contents: write`, only runs git): if upstream `main` is already in
-   fork `main`, stop. Otherwise create `fork-sync/upstream-<sha>` from fork `main`, merge
-   upstream into it and push that new branch. Existing branches are never overwritten.
-   The merge commit message records the upstream SHA and the fork `main` SHA it was based on.
+1. **prepare** (git only): if upstream `main` is already in fork `main`, stop.
+   Otherwise create `fork-sync/upstream-<sha>` from fork `main`, merge upstream into it,
+   and push that new branch. Existing branches are never overwritten, and the push is
+   not forced. `actions/checkout` persists `FORK_SYNC_TOKEN` for the script's `git fetch`
+   and `git push` of `origin`. The default `GITHUB_TOKEN` cannot push commits that change
+   `.github/workflows/`, so the job fails if that secret is missing instead of falling
+   back to it. The merge commit message records the upstream SHA and the fork `main` SHA
+   it was based on.
 2. **build** (`contents: read`, no secrets, credentials not persisted): resolves the
    upstream version contained in that branch, builds it with `Fork - Build macOS (unsigned)`,
    and uploads the app plus `metadata.json`. The project file's `1.0.1` / `1` placeholders
@@ -87,6 +91,13 @@ embeds the placeholders.
 - Actions must be enabled for the fork (Actions tab). GitHub disables scheduled workflows
   in public repositories after 60 days without repository activity; re-enable from the
   workflow page when that happens.
+- Repository secret `FORK_SYNC_TOKEN` (Settings › Secrets and variables › Actions): a
+  fine-grained PAT with Contents and Workflows read/write, limited to this repository.
+  Prepare uses it for every fetch and push of the candidate branch. Upstream merges often
+  change `.github/workflows/`, and GitHub rejects the default `GITHUB_TOKEN` for those
+  pushes (`without workflows permission`) without updating `main`. If the secret is
+  missing, prepare fails and does not fall back to `GITHUB_TOKEN`. The script still
+  pushes only a new `fork-sync/*` branch, never `main`, and never with `--force`.
 - For the propose step: Settings › Actions › General › Workflow permissions › enable
   "Allow GitHub Actions to create and approve pull requests". Without it the build still
   runs and the branch is pushed; open the PR by hand.
