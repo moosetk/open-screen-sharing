@@ -166,5 +166,5 @@ jobs:
         with:
           name: OpenScreenSharing-macOS-unsigned-${{ env.VERSION_LABEL }}-${{ env.SHORT_SHA }}
           path: dist/
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
