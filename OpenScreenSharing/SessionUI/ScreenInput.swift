@@ -73,6 +73,8 @@ final class ScreenInput: NSObject, UIGestureRecognizerDelegate, UIPointerInterac
     private var lastZoomTap: (location: CGPoint, time: TimeInterval)?
 
     private var pinchGoesToMac = false
+    private var remotePinch = false
+    private var remotePinchStarted = false
     private var macPinchStarted = false
     private var previousPinchScale: CGFloat = 1
     private var pinchStartZoom: CGFloat = 1
@@ -600,10 +602,15 @@ final class ScreenInput: NSObject, UIGestureRecognizerDelegate, UIPointerInterac
             pinchGoesToMac =
                 controller.sendsGesturesToMac && !controller.isZoomModeOn
                 && (gesture.numberOfTouches == 0 || fingersTouchDirectly || !AppSettings.shared.pinchZooms)
+            remotePinch = !pinchGoesToMac && gesture.numberOfTouches == 0 && controller.sendRemotePinch(by: 0, phase: .mayBegin)
             touchGestureBegan(gesture)
         }
         if pinchGoesToMac {
             handleMacPinch(gesture)
+            return
+        }
+        if remotePinch {
+            handleRemotePinch(gesture)
             return
         }
         switch gesture.state {
@@ -621,6 +628,27 @@ final class ScreenInput: NSObject, UIGestureRecognizerDelegate, UIPointerInterac
             }
         default:
             break
+        }
+    }
+
+    private func handleRemotePinch(_ gesture: UIPinchGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            previousPinchScale = 1
+            remotePinchStarted = false
+        case .changed:
+            let amount = remotePinchStarted ? gesture.scale / previousPinchScale - 1 : gesture.scale - 1
+            let phase: GesturePhase = remotePinchStarted ? .changed : .began
+            remotePinchStarted = true
+            previousPinchScale = gesture.scale
+            _ = controller.sendRemotePinch(by: amount, phase: phase)
+        default:
+            if remotePinchStarted {
+                _ = controller.sendRemotePinch(by: 0, phase: gesture.state == .ended ? .ended : .cancelled)
+            }
+            remotePinchStarted = false
+            remotePinch = false
+            touchGestureEnded()
         }
     }
 

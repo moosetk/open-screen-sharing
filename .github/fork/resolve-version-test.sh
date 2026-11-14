@@ -288,12 +288,12 @@ fi
 
 resolve_live "$UNRELEASED"
 assert_eq "5a85706 marketing version" "1.0.6" "$marketing_version"
-assert_eq "5a85706 is not labeled 1.0.7" "1.0.7" "$ignored_nightly_marketing_version"
 assert_eq "5a85706 upstream commit" "$UNRELEASED" "$upstream_sha"
 assert_eq "5a85706 release" "v1.0.6" "$release_tag"
 nightly_commit=$(git -C "$live" rev-parse refs/fork-upstream/nightly^{commit})
 nightly_annotation=$(git -C "$live" for-each-ref --format='%(contents:subject)' refs/fork-upstream/nightly)
 if [ "$nightly_commit" = "$UNRELEASED" ] && [ "$nightly_annotation" = 59 ]; then
+  assert_eq "5a85706 is not labeled 1.0.7" "1.0.7" "$ignored_nightly_marketing_version"
   assert_eq "5a85706 build" "59" "$build_number"
   python3 - "$json" <<'PY'
 import json, sys
@@ -332,7 +332,9 @@ rm -f "$envfile" "$json"
 # shellcheck disable=SC1090
 . "$envfile"
 assert_eq "fork checkout marketing version" "1.0.6" "$marketing_version"
-assert_eq "fork checkout ignored nightly marketing version" "1.0.7" "$ignored_nightly_marketing_version"
+if [ "$nightly_commit" = "$UNRELEASED" ] && [ "$nightly_annotation" = 59 ]; then
+  assert_eq "fork checkout ignored nightly marketing version" "1.0.7" "$ignored_nightly_marketing_version"
+fi
 assert_eq "fork checkout upstream commit" "$UNRELEASED" "$upstream_sha"
 if [ "$build_number" = 1 ] || [ "$marketing_version" = "1.0.1" ] || [ "$marketing_version" = "9.9.9" ]; then
   fail "fork checkout used a local placeholder or decoy: $marketing_version ($build_number)"

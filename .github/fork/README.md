@@ -12,6 +12,18 @@ Fork-only files (keep them out of upstream merges' way):
 Everything else is upstream code; `build.yml`, `release.yml` and `select_xcode.sh` are
 upstream's and are left untouched so merges stay clean.
 
+Two temporary behavioral changes sit in upstream code. Remove each one when upstream
+fixes that case. Apple VNC is unchanged by both.
+
+- `internal/rdp/input.go` does not negate vertical scroll, undoing that part of upstream
+  `b73c815`. With the negation, both the trackpad and the mouse wheel are reversed
+  relative to Apple VNC.
+- A trackpad pinch on RDP sends Ctrl+wheel instead of scaling the local picture.
+  Windows apps zoom their own content on that chord, which is what a Windows trackpad
+  pinch becomes. Zoom mode still scales the local picture. The code is
+  `SessionController.sendRemotePinch`, used from `RemoteScreenMacView` and, for an
+  indirect pinch, `ScreenInput`.
+
 ## How updates flow
 
 `main` is the fork's known-good branch and carries the patch as normal commits on top of

@@ -220,6 +220,10 @@ final class SessionController: Identifiable {
     @PerceptionIgnored private var repeatTask: Task<Void, Never>?
     @PerceptionIgnored private var capsLockEngaged = false
     @PerceptionIgnored private var capsLockPressedAt: TimeInterval?
+    /// Fork-only. True when a trackpad pinch pressed Control for RDP content zoom.
+    @PerceptionIgnored private var remotePinchSentControl = false
+    @PerceptionIgnored private var remotePinchActive = false
+    var remotePinchIsActive: Bool { remotePinchActive }
     @PerceptionIgnored private var capsLockActsOnPress = false
     @PerceptionIgnored private var keyboardSourceRequest: KeyboardSourceRequest?
     #if os(macOS)
@@ -1786,6 +1790,7 @@ final class SessionController: Identifiable {
 
     func setZoomMode(_ on: Bool) {
         guard on != isZoomModeOn else { return }
+        if on { releaseRemotePinchControl() }
         isZoomModeOn = on
         if on, isToolbarVisible { toggleToolbar() }
     }
@@ -2004,6 +2009,55 @@ final class SessionController: Identifiable {
         let point = serverPoint(pointerPosition)
         let delta = pictureTurns.pictureVector(delta)
         session?.sendScroll(x: Int(point.x), y: Int(point.y), deltaX: Double(delta.x), deltaY: Double(delta.y))
+    }
+
+    /// Pixels of vertical wheel movement for a magnification of 1.
+    /// At the RDP wheel scale this is about one Windows notch per 10% pinch, which is
+    /// close to how much a browser zooms. Fork-only; see `sendRemotePinch`.
+    private static let remotePinchPixelsPerMagnification: CGFloat = 200
+
+    /// Fork-only. RDP has no Apple magnify gesture, so a trackpad pinch used to scale the
+    /// local picture. Windows apps zoom their own content for Ctrl+wheel, which is what a
+    /// Windows trackpad pinch turns into. Returns whether this client consumed the event.
+    /// Remove this when upstream does the same. Apple VNC keeps `magnify` and is unchanged.
+    /// Zoom mode still scales the local picture.
+    func sendRemotePinch(by magnification: CGFloat, phase: GesturePhase) -> Bool {
+        guard route.remoteProtocol == .rdp, !isZoomModeOn else {
+            if phase == .ended || phase == .cancelled { releaseRemotePinchControl() }
+            return false
+        }
+        switch phase {
+        case .mayBegin:
+            return isControlling
+        case .began, .changed, .ended:
+            guard isControlling || remotePinchActive else { return false }
+            if isControlling {
+                remotePinchActive = true
+                if !remotePinchSentControl, sentModifiers[.control] == nil, !pressedModifiers.contains(.control), !lockedModifiers.contains(.control) {
+                    let key = ModifierKey.control.macKey
+                    sentModifiers[.control] = key
+                    send(key, down: true)
+                    remotePinchSentControl = true
+                }
+                if magnification != 0 {
+                    scroll(byPixels: CGPoint(x: 0, y: magnification * Self.remotePinchPixelsPerMagnification))
+                }
+            }
+            if phase == .ended { releaseRemotePinchControl() }
+            return true
+        case .cancelled:
+            releaseRemotePinchControl()
+            return true
+        }
+    }
+
+    private func releaseRemotePinchControl() {
+        remotePinchActive = false
+        guard remotePinchSentControl else { return }
+        remotePinchSentControl = false
+        guard let key = sentModifiers[.control] else { return }
+        sentModifiers[.control] = nil
+        send(key, down: false)
     }
 
     private func clampToImage(_ point: CGPoint) -> CGPoint {
@@ -2568,6 +2622,8 @@ final class SessionController: Identifiable {
     }
 
     func releaseAllKeys() {
+        remotePinchSentControl = false
+        remotePinchActive = false
         stopRepeat()
         let keys = pressedKeys.values.sorted { lhs, rhs in !lhs.isModifier && rhs.isModifier }
         pressedKeys.removeAll()

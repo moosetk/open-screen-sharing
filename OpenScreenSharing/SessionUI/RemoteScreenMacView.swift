@@ -897,6 +897,10 @@ final class RemoteScreenNSView: NSView, RemoteScreen {
             controller.magnify(at: controller.pointerPosition, by: event.magnification, phase: phase)
             return
         }
+        if let phase = GesturePhase(event.phase), controller.sendRemotePinch(by: event.magnification, phase: phase) {
+            return
+        }
+        if controller.remotePinchIsActive { return }
         let location = convert(event.locationInWindow, from: nil)
         setZoom(zoom * (1 + event.magnification), keeping: imagePoint(for: location), at: location)
     }
